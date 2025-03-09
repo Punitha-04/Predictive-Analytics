@@ -360,45 +360,79 @@ def visualize_sales():
     try:
         days = int(request.args.get("days", 30))
         safety_stock = int(request.args.get("safety_stock", 10))
+
+        # Load model
         with open(MODEL_FILE, "rb") as f:
             model = pickle.load(f)
+
+        # Fetch sales data
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT date, sales FROM sales ORDER BY date ASC;")
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
+
         if not rows:
             return jsonify({"error": "No sales data available"}), 404
+
         df = pd.DataFrame(rows, columns=['date', 'sales'])
         df['date'] = pd.to_datetime(df['date'])
-        df['days_since_start'] = (df['date'] - df['date'].min()).dt.days
+
+        # Normalize days_since_start for better learning
+        df['days_since_start'] = (df['date'] - df['date'].min()).dt.days.astype(float)
+
+        print("\n--- Actual Sales Data ---")
+        print(df.head())  # Debugging
+
+        # Get the last date from sales data
         last_date = df['date'].max()
         future_dates = [last_date + timedelta(days=i) for i in range(1, days + 1)]
         future_days_since_start = [(date - df['date'].min()).days for date in future_dates]
+
+        # Predict future sales
         predicted_sales = model.predict(np.array(future_days_since_start).reshape(-1, 1))
-        predicted_sales = np.clip(predicted_sales, 0, None)
+        predicted_sales = np.clip(predicted_sales, 0, None)  # Ensure no negative values
+
+        print("\n--- Predicted Sales ---")
+        print(predicted_sales[:10])  # Debugging (first 10 predictions)
+
+        # Inventory Calculation
         total_demand = np.sum(predicted_sales)
         optimized_inventory = total_demand + safety_stock
+
+        print(f"\nOptimized Inventory: {optimized_inventory}")  # Debugging
+
+        # Create Plot
+        plt.figure(figsize=(12, 6))
         fig, ax1 = plt.subplots(figsize=(12, 6))
+
+        # Actual Sales
         ax1.set_xlabel("Date")
         ax1.set_ylabel("Sales", color="blue")
         ax1.plot(df['date'], df['sales'], 'bo-', label="Actual Sales")
         ax1.plot(future_dates, predicted_sales, 'r--', label="Predicted Sales")
         ax1.tick_params(axis="y", labelcolor="blue")
         ax1.legend(loc="upper left")
+
+        # Optimized Inventory Line
         ax2 = ax1.twinx()
         ax2.set_ylabel("Optimized Inventory", color="green")
         ax2.axhline(y=optimized_inventory, color="green", linestyle="dotted", label="Optimized Inventory")
         ax2.tick_params(axis="y", labelcolor="green")
         ax2.legend(loc="upper right")
+
         plt.title("Sales Forecasting & Inventory Optimization")
         plt.grid(True)
+
+        # Save image to buffer
         img = io.BytesIO()
         plt.savefig(img, format="png")
         img.seek(0)
         plt.close()
+
         return send_file(img, mimetype="image/png")
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
